@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-
+from habitat_extensions.task import BertInstructionSensor
+from vlnce_baselines.common.candidate_actions import register_candidate_actions
+register_candidate_actions()
 import argparse
 import os
 import random
-
+import torch.distributed as dist
 import numpy as np
 import torch
 from habitat import logger
 from habitat_baselines.common.baseline_registry import baseline_registry
-
+import vlnce_baselines.models.candidate_policy
 import habitat_extensions  # noqa: F401
 import vlnce_baselines  # noqa: F401
 from vlnce_baselines.config.default import get_config
@@ -52,6 +54,29 @@ def run_exp(exp_config: str, run_type: str, opts=None) -> None:
         opts: list of strings of additional config options.
     """
     config = get_config(exp_config, opts)
+    # =========================================================================
+    # 🔥🔥🔥 核心修改：DDP 分布式初始化逻辑 🔥🔥🔥
+    # =========================================================================
+    # torchrun 会自动设置 LOCAL_RANK 环境变量
+    if "LOCAL_RANK" in os.environ:
+        local_rank = int(os.environ["LOCAL_RANK"])
+        
+        # 1. 动态修改配置，把 GPU ID 改为当前进程的 Rank
+        config.defrost()
+        config.TORCH_GPU_ID = local_rank
+        config.SIMULATOR_GPU_ID = local_rank
+        config.freeze()
+
+        # 2. 设置当前进程可见的 GPU
+        torch.cuda.set_device(local_rank)
+        
+        # 3. 初始化进程组 (DDP 必须步骤)
+        # 只有初始化了，后续 Trainer 里的 DDPModel 才能正常工作
+        dist.init_process_group(backend="nccl", init_method="env://")
+        
+        logger.info(f"Process {local_rank} initialized DDP on GPU {local_rank}")
+    # =========================================================================
+
     logger.info(f"config: {config}")
     logdir = "/".join(config.LOG_FILE.split("/")[:-1])
     if logdir:
@@ -68,6 +93,8 @@ def run_exp(exp_config: str, run_type: str, opts=None) -> None:
 
     if run_type == "eval":
         torch.backends.cudnn.deterministic = True
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()  # 清理一下显存cache
         if config.EVAL.EVAL_NONLEARNING:
             evaluate_agent(config)
             return

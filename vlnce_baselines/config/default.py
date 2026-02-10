@@ -106,7 +106,7 @@ _C.IL.DAGGER.expert_policy_sensor = "SHORTEST_PATH_SENSOR"
 _C.IL.DAGGER.expert_policy_sensor_uuid = "shortest_path_sensor"
 _C.IL.DAGGER.lmdb_map_size = 1.2e12
 # if True, saves data to disk in fp16 and converts back to fp32 when loading.
-_C.IL.DAGGER.lmdb_fp16 = False
+_C.IL.DAGGER.lmdb_fp16 = True
 # How often to commit the writes to the DB, less commits is
 # better, but everything must be in memory until a commit happens.
 _C.IL.DAGGER.lmdb_commit_frequency = 500
@@ -235,6 +235,8 @@ _C.MODEL.INSTRUCTION_ENCODER.hidden_size = 128
 _C.MODEL.INSTRUCTION_ENCODER.rnn_type = "LSTM"
 _C.MODEL.INSTRUCTION_ENCODER.final_state_only = True
 _C.MODEL.INSTRUCTION_ENCODER.bidirectional = False
+# 是否需要进行微调BERT模型参数
+_C.MODEL.INSTRUCTION_ENCODER.fine_tune_bert = True # 先占个坑，默认值设啥都行
 
 _C.MODEL.RGB_ENCODER = CN()
 _C.MODEL.RGB_ENCODER.cnn_type = "TorchVisionResNet50"
@@ -320,11 +322,30 @@ def get_config(
         prev_task_config = ""
         for config_path in config_paths:
             config.merge_from_file(config_path)
+            print("114514")
+            print(config_path)
             if config.BASE_TASK_CONFIG_PATH != prev_task_config:
-                config.TASK_CONFIG = get_task_config(
-                    config.BASE_TASK_CONFIG_PATH
-                )
+                # 2. 加载 Base Task Config (旧配置)
+                base_config = get_task_config(config.BASE_TASK_CONFIG_PATH)
+                
+                # 🔥🔥🔥【关键修复 1】允许新 Key 🔥🔥🔥
+                # 因为 BERT_INSTRUCTION_SENSOR 是 Base 里没有的新 Key，必须开启这个权限
+                base_config.defrost()
+                base_config.set_new_allowed(True)
+                
+                # 3. 将 Base 挂载到主配置 (这时候 config.TASK_CONFIG 变成了旧配置)
+                config.TASK_CONFIG = base_config
+                
+                # 🔥🔥🔥【关键修复 2】再次合并用户 YAML 🔥🔥🔥
+                # 强制再读一遍你的文件，把你写的 BERT 配置“盖”在旧配置上面
+                config.merge_from_file(config_path)
+                
                 prev_task_config = config.BASE_TASK_CONFIG_PATH
+            # if config.BASE_TASK_CONFIG_PATH != prev_task_config:
+            #     config.TASK_CONFIG = get_task_config(
+            #         config.BASE_TASK_CONFIG_PATH
+            #     )
+            #     prev_task_config = config.BASE_TASK_CONFIG_PATH
 
     if opts:
         config.CMD_TRAILING_OPTS = opts

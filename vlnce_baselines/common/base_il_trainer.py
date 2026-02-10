@@ -31,7 +31,7 @@ from vlnce_baselines.common.utils import extract_instruction_tokens
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
-    import tensorflow as tf  # noqa: F401
+    # import tensorflow as tf  # noqa: F401
 
 
 class BaseVLNCETrainer(BaseILTrainer):
@@ -72,11 +72,57 @@ class BaseVLNCETrainer(BaseILTrainer):
         if load_from_ckpt:
             ckpt_path = config.IL.ckpt_to_load
             ckpt_dict = self.load_checkpoint(ckpt_path, map_location="cpu")
-            self.policy.load_state_dict(ckpt_dict["state_dict"])
+            # ----------------- 修复 DDP 权重加载问题的补丁 Start -----------------
+            state_dict = ckpt_dict["state_dict"]
+            new_state_dict = {}
+            for k, v in state_dict.items():
+                # 如果权重里包含 'net.module.'，把 'module.' 去掉，变成 'net.'
+                if "net.module." in k:
+                    new_k = k.replace("net.module.", "net.")
+                    new_state_dict[new_k] = v
+                # 有些老版本的 PyTorch DDP 可能是直接以 module. 开头
+                elif k.startswith("module."):
+                    new_k = k.replace("module.", "")
+                    new_state_dict[new_k] = v
+                else:
+                    new_state_dict[k] = v
+            
+            # 使用处理过的新字典加载
+            self.policy.load_state_dict(new_state_dict)
+            # ----------------- 修复 DDP 权重加载问题的补丁 End -------------------
+            # 下面1行是官方原来的代码
+            # self.policy.load_state_dict(ckpt_dict["state_dict"])
             if config.IL.is_requeue:
-                self.optimizer.load_state_dict(ckpt_dict["optim_state"])
-                self.start_epoch = ckpt_dict["epoch"] + 1
-                self.step_id = ckpt_dict["step_id"]
+                # ----------------- 修复优化器加载问题的补丁 Start -----------------
+                if "optim_state" in ckpt_dict:
+                    print(f"Loading optimizer state from checkpoint...")
+                    self.optimizer.load_state_dict(ckpt_dict["optim_state"])
+                else:
+                    print(f"\n{'='*40}")
+                    print(f"⚠️  WARNING: 'optim_state' not found in checkpoint!")
+                    print(f"   Starting with a FRESH optimizer.")
+                    print(f"   Expect a small loss spike in the first few steps.")
+                    print(f"{'='*40}\n")
+                 # ----------------- 修复优化器加载问题的补丁 End -------------------  
+                # ----------------- 修复 Epoch/Step 缺失问题的补丁 -----------------
+                if "step_id" in ckpt_dict:
+                    self.step_id = ckpt_dict["step_id"]
+                else:
+                    # 🔥 这里填入截图中的确切数字
+                    print(f"⚠️  Restoring step_id from TensorBoard: 295143")
+                    self.step_id = 295143
+                
+                if "epoch" in ckpt_dict:
+                    self.start_epoch = ckpt_dict["epoch"] + 1
+                else:
+                    # 既然跑了 27万步，大概是第 20 或 21 个 epoch
+                    # 为了安全起见，这里可以设为 20 (对应 ckpt.19.pth)
+                    self.start_epoch = 21
+                # ---------------------------------------------------------------  
+                # 下面3行是官方原来的代码
+                # self.optimizer.load_state_dict(ckpt_dict["optim_state"])
+                # self.start_epoch = ckpt_dict["epoch"] + 1
+                # self.step_id = ckpt_dict["step_id"]
             logger.info(f"Loaded weights from checkpoint: {ckpt_path}")
 
         params = sum(param.numel() for param in self.policy.parameters())
@@ -114,7 +160,7 @@ class BaseVLNCETrainer(BaseILTrainer):
         )
         return observation_space, action_space
 
-    def save_checkpoint(self, file_name: str) -> None:
+    def save_checkpoint(self, file_name: str, epoch: int = 0, step_id: int = 0) -> None:
         """Save checkpoint with specified name.
 
         Args:
@@ -123,6 +169,11 @@ class BaseVLNCETrainer(BaseILTrainer):
         checkpoint = {
             "state_dict": self.policy.state_dict(),
             "config": self.config,
+            # 🔥 新增：保存优化器状态，这是断点续传的灵魂
+            "optim_state": self.optimizer.state_dict(),
+            # 🔥 新增：保存进度，以便 Resume 时知道从哪开始
+            "epoch": epoch,
+            "step_id": step_id,
         }
         torch.save(
             checkpoint, os.path.join(self.config.CHECKPOINT_FOLDER, file_name)
@@ -143,9 +194,16 @@ class BaseVLNCETrainer(BaseILTrainer):
     ):
         T, N = corrected_actions.size()
 
+        # 🔥🔥🔥【核心修改开始】🔥🔥🔥
+        # 自动判断是否使用了 DDP。如果是，则取出内部的 module 用于访问属性
+        # 注意：只用于访问属性（如 num_recurrent_layers），不要用于前向传播！
+        net = self.policy.net.module if hasattr(self.policy.net, "module") else self.policy.net
+        # 🔥🔥🔥【核心修改结束】🔥🔥🔥
+
         recurrent_hidden_states = torch.zeros(
             N,
-            self.policy.net.num_recurrent_layers,
+            net.num_recurrent_layers,  # ✅ 这里改成用 net，而不是 self.policy.net
+            # 原来的代码 self.policy.net.num_recurrent_layers,
             self.config.MODEL.STATE_ENCODER.hidden_size,
             device=self.device,
         )

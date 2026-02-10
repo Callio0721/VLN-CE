@@ -15,6 +15,9 @@ from habitat_extensions.shortest_path_follower import (
 )
 from habitat_extensions.task import VLNExtendedEpisode
 
+# 引用上面的 utils
+from vlnce_baselines.common.waypoint_utils import get_candidate_waypoints
+
 
 @registry.register_sensor(name="GlobalGPSSensor")
 class GlobalGPSSensor(Sensor):
@@ -194,3 +197,52 @@ class RxRInstructionSensor(Sensor):
         s = features["features"].shape
         feats[: s[0], : s[1]] = features["features"]
         return feats
+
+
+@registry.register_sensor
+class WaypointSensor(Sensor):
+    uuid: str = "candidate_waypoints"
+
+    def __init__(self, sim, config, **kwargs):
+        self._sim = sim
+        # 修复之前的 getattr 问题
+        self._num_candidates = getattr(config, "NUM_CANDIDATES", 12)
+        
+        # 🔥 关键修改：把 observation_space 的定义逻辑封装好
+        # 虽然这里定义了，但为了保险，必须实现 _get_observation_space
+        self.observation_space = spaces.Box(
+            low=-np.inf, 
+            high=np.inf, 
+            shape=(self._num_candidates, 4), 
+            dtype=np.float32
+        )
+        
+        # 调用父类初始化
+        super().__init__(config=config)
+
+    # 🔥🔥 新增这个方法来修复 NotImplementedError 🔥🔥
+    def _get_observation_space(self, *args, **kwargs):
+        return spaces.Box(
+            low=-np.inf, 
+            high=np.inf, 
+            shape=(self._num_candidates, 4), 
+            dtype=np.float32
+        )
+
+    def _get_uuid(self, *args, **kwargs):
+        return self.uuid
+
+    def _get_sensor_type(self, *args, **kwargs):
+        return SensorTypes.POSITION
+
+    def get_observation(self, observations, episode, **kwargs):
+        candidates = get_candidate_waypoints(self._sim, num_candidates=self._num_candidates)
+        obs_feats = []
+        for cand in candidates:
+            # valid_flag = 1.0 if valid else 0.0
+            if cand["position"] is not None:
+                feat = np.concatenate([cand["features"], [1.0]])
+            else:
+                feat = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+            obs_feats.append(feat)
+        return np.array(obs_feats, dtype=np.float32)

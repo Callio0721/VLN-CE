@@ -10,6 +10,11 @@ from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.rl.models.rnn_state_encoder import (
     build_rnn_state_encoder,
 )
+# 🔥🔥🔥 修改点 1: 引入 BertInstructionEncoder
+from vlnce_baselines.models.encoders.instruction_encoder import (
+    InstructionEncoder,
+    BertInstructionEncoder, 
+)
 from habitat_baselines.rl.ppo.policy import Net
 from torch import Tensor
 
@@ -63,10 +68,35 @@ class CMANet(Net):
         model_config.INSTRUCTION_ENCODER.final_state_only = False
         model_config.freeze()
 
+        # 🔥🔥🔥 修改点 2: 智能判断并加载 BERT Encoder
+
+        # 1. 读取 YAML 中的 rnn_type 字段
+        encoder_type = model_config.INSTRUCTION_ENCODER.rnn_type       
+        print(f"现在开始进行检查：Checking Instruction Encoder Config: {encoder_type}")
+
+        # 2. 根据类型实例化不同的类
+        if encoder_type == "BERT":
+            # Policy 不关心是否微调，它直接把 config 传进去
+            # BertInstructionEncoder 内部会自己去读 fine_tune_bert
+            print("🚀 Switching to BERT Instruction Encoder")
+            self.instruction_encoder = BertInstructionEncoder(
+                model_config.INSTRUCTION_ENCODER
+            )
+
+        elif encoder_type == "LSTM" or encoder_type == "GRU":
+            print("🐢 Using Standard RNN Instruction Encoder")
+            self.instruction_encoder = InstructionEncoder(
+                model_config.INSTRUCTION_ENCODER
+            )
+            
+        else:
+            raise ValueError(f"Unknown rnn_type: {encoder_type}")
+
+        # 下面三行是原有的代码
         # Init the instruction encoder
-        self.instruction_encoder = InstructionEncoder(
-            model_config.INSTRUCTION_ENCODER
-        )
+        # self.instruction_encoder = InstructionEncoder(
+        #     model_config.INSTRUCTION_ENCODER
+        # )
 
         # Init the depth encoder
         assert model_config.DEPTH_ENCODER.cnn_type in ["VlnResnetDepthEncoder"]
@@ -85,6 +115,7 @@ class CMANet(Net):
         assert model_config.RGB_ENCODER.cnn_type in [
             "TorchVisionResNet18",
             "TorchVisionResNet50",
+            "ClipVisualEncoder",  # <--- 添加这一行
         ]
         self.rgb_encoder = getattr(
             resnet_encoders, model_config.RGB_ENCODER.cnn_type
@@ -295,11 +326,19 @@ class CMANet(Net):
 
         if self.model_config.PROGRESS_MONITOR.use and AuxLosses.is_active():
             progress_hat = torch.tanh(self.progress_monitor(x))
+
+           # 修改开始：使用 view(-1) 或 reshape(-1) 强制拉平
             progress_loss = F.mse_loss(
-                progress_hat.squeeze(1),
-                observations["progress"],
+                progress_hat.reshape(-1),          # 确保变成一维 [N]
+                observations["progress"].reshape(-1), # 确保变成一维 [N]
                 reduction="none",
             )
+            # 修改结束 
+            # progress_loss = F.mse_loss(
+            #     progress_hat.squeeze(1),
+            #     observations["progress"],
+            #     reduction="none",
+            # )
             AuxLosses.register_loss(
                 "progress_monitor",
                 progress_loss,

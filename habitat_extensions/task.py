@@ -1,7 +1,7 @@
 import gzip
 import json
 import os
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Any
 
 import attr
 from habitat.config import Config
@@ -230,3 +230,71 @@ class RxRVLNCEDatasetV1(Dataset):
     @staticmethod
     def _language_from_episode(episode: VLNExtendedEpisode) -> str:
         return episode.instruction.language
+
+
+# =========================================================
+# 🔥 新增部分：BERT 专用 Sensor
+# 放在 task.py 的 imports 下面即可
+# =========================================================
+from transformers import BertTokenizer
+import numpy as np
+from gym import spaces
+from habitat.core.simulator import Sensor, SensorTypes
+
+# 全局缓存 Tokenizer，防止多进程重复加载卡死
+_BERT_TOKENIZER = None
+
+def get_tokenizer():
+    global _BERT_TOKENIZER
+    if _BERT_TOKENIZER is None:
+        print("Loading BERT Tokenizer...")
+        _BERT_TOKENIZER = BertTokenizer.from_pretrained("bert-base-uncased")
+    return _BERT_TOKENIZER
+
+@registry.register_sensor(name="BertInstructionSensor")
+class BertInstructionSensor(Sensor):
+    def __init__(self, config: Config, dataset: Dataset, *args: Any, **kwargs: Any):
+        # 1. 读取配置中的 MAX_LENGTH (比如 200)
+        # 如果配置里没写，就默认 128
+        self.max_length = getattr(config, "MAX_LENGTH", 128)
+
+        print(f"🚀 Config Max Length: {self.max_length}") # 打印确认
+
+        self._config = config
+        self._dataset = dataset
+        super().__init__(config=config)
+        get_tokenizer()
+
+    def _get_uuid(self, *args: Any, **kwargs: Any) -> str:
+        return "instruction"
+
+    def _get_sensor_type(self, *args: Any, **kwargs: Any) -> SensorTypes:
+        return SensorTypes.TOKEN_IDS
+
+    def _get_observation_space(self, *args: Any, **kwargs: Any) -> spaces.Space:
+        # 🔥 修改点 1: 告诉 Habitat，我输出的数组长度永远固定是 self.max_length
+        return spaces.Box(
+            low=0,
+            high=30522,
+            shape=(self.max_length,), # <--- 这里必须用变量，不能写死 256
+            dtype=np.int64,
+        )
+
+    def get_observation(
+        self, observations: Dict[str, Any], episode: VLNEpisode, *args: Any, **kwargs: Any
+    ):
+        tokenizer = get_tokenizer()
+        text = episode.instruction.instruction_text
+        
+        # 🔥 修改点 2: 真正使用 MAX_LENGTH 进行 "削足适履"
+        encoded = tokenizer(
+            text, 
+            add_special_tokens=True,
+            padding='max_length',       # <--- 关键：短了就补 0
+            truncation=True,            # <--- 关键：长了就截断
+            max_length=self.max_length, # <--- 关键：目标长度
+            return_tensors="np"
+        )
+        
+        token_ids = encoded['input_ids'][0]
+        return token_ids.astype(np.int64)

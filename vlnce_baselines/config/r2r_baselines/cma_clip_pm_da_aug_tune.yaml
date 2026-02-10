@@ -1,0 +1,79 @@
+BASE_TASK_CONFIG_PATH: habitat_extensions/config/vlnce_task.yaml # ⚠️ DAgger 阶段通常用标准 Task 配置，不需要 _aug
+
+# -----------------------------------------------------------------------------
+# 硬件与系统设置
+# -----------------------------------------------------------------------------
+SIMULATOR_GPU_IDS: [0, 2, 3, 4, 5, 6]
+TORCH_GPU_ID: 3
+# ⚠️ DAgger 需要在训练循环中频繁进行采样 (Sampling)
+# 为了防止 DDP 死锁和内存爆炸，建议保守设置。
+# 如果用 4 卡 DDP，这里设为 1，总共就是 4 个环境。
+NUM_ENVIRONMENTS: 3
+
+TENSORBOARD_DIR: data/tensorboard_dirs/cma_clip_pm_da_aug_tune
+CHECKPOINT_FOLDER: data/checkpoints/cma_clip_pm_da_aug_tune
+EVAL_CKPT_PATH_DIR: data/checkpoints/cma_clip_pm_da_aug_tune
+RESULTS_DIR: data/checkpoints/cma_clip_pm_da_aug_tune/evals
+
+# -----------------------------------------------------------------------------
+# 评估设置
+# -----------------------------------------------------------------------------
+EVAL:
+  USE_CKPT_CONFIG: False
+  SPLIT: val_unseen
+  EPISODE_COUNT: -1
+
+# -----------------------------------------------------------------------------
+# DAgger 微调设置
+# -----------------------------------------------------------------------------
+IL:
+  # DAgger 的内层循环：每一轮采样后，训练几个 Epoch
+  epochs: 4 
+  batch_size: 5
+
+  DAGGER:
+    # 外层循环：采样 -> 训练 -> 采样 -> 训练
+    iterations: 10
+    
+    # ⚠️ 每次采样多少条新数据
+    # R2R 标准做法通常是 5000 或 6000
+    # 如果你想快速调试流程，可以设为 100-500
+    update_size: 5000 
+    
+    # 混合策略概率：0.75 或 0.5
+    # 意思是 50% 的时间听专家的，50% 的时间模型自己走（然后被纠正）
+    p: 0.45 
+
+    # ⚠️ 关键设置：DAgger 必须为 False
+    # 因为我们要让模型在环境中实时交互产生新数据，而不是读取硬盘旧数据
+    preload_lmdb_features: False 
+    
+    # 这些新产生的数据暂存的位置（每轮都会被清空重写）
+    lmdb_features_dir: data/trajectories_dirs/cma_clip_pm_da_aug_tune/trajectories.lmdb
+    lmdb_map_size: 1e12 # 1TB 空间预留，防止溢出
+    
+    # ⚠️ 极为重要：从 Stage 1 加载权重
+    load_from_ckpt: True
+    # 请修改为你 Stage 1 (cma_clip_pm_aug) 跑出来的最好的模型路径
+    # 例如：data/checkpoints/cma_clip_pm_aug/ckpt.44.pth (如果是45个epoch)
+    ckpt_to_load: /data/checkpoints/cma_clip_pm_da_aug_tune/第二次训练/ckpt.20.pth
+
+# -----------------------------------------------------------------------------
+# 模型结构 (必须与 Stage 1 完全一致)
+# -----------------------------------------------------------------------------
+MODEL:
+  policy_name: CMAPolicy
+
+  INSTRUCTION_ENCODER:
+    bidirectional: True
+    # 如果你在 Stage 1 用了 BERT，这里也得加上 BERT 的配置
+    # 如果是 standard LSTM，保持默认即可
+
+  # ✅ 继承 CLIP 视觉编码器
+  RGB_ENCODER:
+    cnn_type: "ClipVisualEncoder"
+    output_size: 256
+    trainable: True 
+
+  PROGRESS_MONITOR:
+    use: True

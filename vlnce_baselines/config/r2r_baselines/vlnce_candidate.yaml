@@ -1,0 +1,97 @@
+# 🔥 修改这里，指向新的基础配置
+BASE_TASK_CONFIG_PATH: habitat_extensions/config/vlnce_task_candidate.yaml
+
+# -----------------------------------------------------------------------------
+# 硬件与系统设置
+# -----------------------------------------------------------------------------
+SIMULATOR_GPU_IDS: [2,3,4,5,6] # [0,1,2,3,4,5,6] 
+TORCH_GPU_ID: 2
+NUM_ENVIRONMENTS: 4
+
+TENSORBOARD_DIR: data/tensorboard_dirs/candidate_cma_clip_bert
+CHECKPOINT_FOLDER: data/checkpoints/candidate_cma_clip_bert
+EVAL_CKPT_PATH_DIR: data/checkpoints/candidate_cma_clip_bert
+RESULTS_DIR: data/checkpoints/candidate_cma_clip_bert/evals
+
+# ... (中间的 EVAL, IL 等设置保持不变) ...
+EVAL:
+  USE_CKPT_CONFIG: False
+  SPLIT: val_unseen
+  EPISODE_COUNT: -1
+
+# -----------------------------------------------------------------------------
+# 模仿学习 (Imitation Learning) 设置
+# -----------------------------------------------------------------------------
+IL:
+  # 官方默认 45，BERT+CLIP 收敛快，但保持 45 可以跑出更高分
+  epochs: 45
+  batch_size: 3
+
+  DAGGER:
+    iterations: 1 # Stage 1: 纯 Teacher Forcing
+    lmdb_fp16: True
+    # R2R (10k) + Aug (147k) ≈ 15.7万条数据
+    # 这是最耗时的步骤，进度条会走很久，耐心等待
+    update_size: 80000
+    
+    p: 1.0
+
+    # 第一次跑设为 False (生成数据)
+    # 如果中途断了想续传，代码会自动检测目录非空，不用手动改 True
+    preload_lmdb_features: False
+    lmdb_features_dir: data/trajectories_dirs/vlnce_candidate/trajectories.lmdb
+    lmdb_map_size: 2e12
+# -----------------------------------------------------------------------------
+# 任务与传感器配置
+# -----------------------------------------------------------------------------
+TASK_CONFIG:
+  TASK:
+    # 只需要覆盖 Sensor 列表即可，ACTIONS 已经由 BASE_TASK_CONFIG_PATH 定义好了
+    # SENSORS: ['RGB_SENSOR', 'DEPTH_SENSOR', 'INSTRUCTION_SENSOR']
+    # SENSORS: ['INSTRUCTION_SENSOR', 'SHORTEST_PATH_SENSOR', 'VLN_ORACLE_PROGRESS_SENSOR', 'WAYPOINT_SENSOR']
+    # SENSORS: ['BERT_INSTRUCTION_SENSOR', 'SHORTEST_PATH_SENSOR', 'VLN_ORACLE_PROGRESS_SENSOR'] 
+    SENSORS: ['BERT_INSTRUCTION_SENSOR', 'SHORTEST_PATH_SENSOR', 'VLN_ORACLE_PROGRESS_SENSOR', 'WAYPOINT_SENSOR']
+
+
+# 模型结构配置
+# -----------------------------------------------------------------------------
+MODEL:
+  policy_name: CandidateCMAPolicy
+  CANDIDATE:
+    num_candidates: 12
+
+  # --- 1. 语言编码器 (BERT) ---
+  INSTRUCTION_ENCODER:
+    rnn_type: "BERT"
+    vocab_size: 30522
+    embedding_size: 768
+    hidden_size: 256
+    fine_tune_bert: False
+    final_state_only: False
+  # INSTRUCTION_ENCODER:
+  #   rnn_type: "LSTM"
+  #   bidirectional: True
+
+  # --- 2. 视觉编码器 (CLIP) ---
+  RGB_ENCODER:
+    cnn_type: "ClipVisualEncoder"
+    output_size: 256
+    trainable: True
+
+  # --- 3. 深度编码器 (ResNet) ---
+  DEPTH_ENCODER:
+    cnn_type: "VlnResnetDepthEncoder"
+    output_size: 128
+    backbone: "resnet50"
+    ddppo_checkpoint: "data/ddppo-models/gibson-2plus-resnet50.pth" # 确保存放了DDPPO权重
+    trainable: False
+
+  # --- 4. 状态编码器 (RNN) ---
+  STATE_ENCODER:
+    hidden_size: 512
+    rnn_type: "GRU"
+
+  # --- 5. 进度监控 ---
+  PROGRESS_MONITOR:
+    use: True
+    alpha: 1.0

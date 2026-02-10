@@ -145,3 +145,9 @@ stats_*.json
 
 # custom slurm utils
 sbatch_scripts
+
+
+bert-base-uncased/
+clip-vit-base-patch32/
+data/
+train.log
