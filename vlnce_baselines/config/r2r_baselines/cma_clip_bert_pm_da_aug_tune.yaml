@@ -1,0 +1,98 @@
+BASE_TASK_CONFIG_PATH: habitat_extensions/config/vlnce_task.yaml # DAgger 阶段通常用标准 Task 配置
+
+# -----------------------------------------------------------------------------
+# 硬件与系统设置
+# -----------------------------------------------------------------------------
+SIMULATOR_GPU_IDS: [0, 1, 2, 3, 4, 5, 6, 7]  # 建议与 Stage 1 保持一致或根据显卡空闲情况调整
+TORCH_GPU_ID: 1
+# DAgger 需要实时采样，内存压力较大。
+# 建议保守设置，如果显存够大可以设为 2 或 3
+NUM_ENVIRONMENTS: 3
+
+TENSORBOARD_DIR: data/tensorboard_dirs/cma_clip_bert_pm_da_aug_tune
+CHECKPOINT_FOLDER: data/checkpoints/cma_clip_bert_pm_da_aug_tune
+EVAL_CKPT_PATH_DIR: data/checkpoints/cma_clip_bert_pm_da_aug_tune
+RESULTS_DIR: data/checkpoints/cma_clip_bert_pm_da_aug_tune/evals
+
+# -----------------------------------------------------------------------------
+# 评估设置
+# -----------------------------------------------------------------------------
+EVAL:
+  USE_CKPT_CONFIG: False
+  SPLIT: val_unseen
+  EPISODE_COUNT: -1
+
+# -----------------------------------------------------------------------------
+# DAgger 微调设置 (核心逻辑)
+# -----------------------------------------------------------------------------
+IL:
+  # DAgger 的内层循环：每一轮采样后，训练几个 Epoch
+  epochs: 4
+  batch_size: 5 # 保持与 Stage 1 一致或略小
+
+  # 🔥🔥🔥 关键：加载 Stage 1 的权重 🔥🔥🔥
+  load_from_ckpt: True
+  # ⚠️⚠️⚠️ 请手动修改这里！指向你 Stage 1 跑出来的最佳模型路径 ⚠️⚠️⚠️
+  ckpt_to_load: data/checkpoints/cma_clip_bert_pm_aug/ckpt.5.pth
+
+  DAGGER:
+    # 外层循环：采样 -> 训练 -> 采样 -> 训练
+    iterations: 10
+    
+    # 每次采样多少条新数据 (R2R 标准是 5000)
+    update_size: 5000
+    
+    # 混合策略概率：0.5 或 0.75
+    # 0.5 = 50% 概率听专家的，50% 概率用 BERT 模型自己预测
+    p: 0.5
+
+    # ⚠️ 必须为 False：我们要在线采集数据，不能读硬盘里的旧数据
+    preload_lmdb_features: False
+    
+    # 这些新数据暂存的位置 (每轮会被覆盖)
+    lmdb_features_dir: data/trajectories_dirs/cma_clip_bert_pm_da_aug_tune/trajectories.lmdb
+    lmdb_map_size: 1e12
+    lmdb_fp16: True
+    # ⚠️ 提交频率设为 500，千万不要设为 1，否则慢死
+    lmdb_commit_frequency: 500
+
+# -----------------------------------------------------------------------------
+# 任务与传感器配置 (必须包含 BERT Sensor 设置！)
+# -----------------------------------------------------------------------------
+TASK_CONFIG:
+  TASK:
+    # 覆盖旧 Sensor 列表，确保包含 BERT Sensor 和 DAgger 必需的 SHORTEST_PATH_SENSOR
+    SENSORS: ['BERT_INSTRUCTION_SENSOR', 'SHORTEST_PATH_SENSOR', 'VLN_ORACLE_PROGRESS_SENSOR']
+    
+    # 定义 BERT Sensor 参数 (必须与 Stage 1 一致，否则维度对不上)
+    BERT_INSTRUCTION_SENSOR:
+      TYPE: BertInstructionSensor
+      MAX_LENGTH: 200
+
+# -----------------------------------------------------------------------------
+# 模型结构配置 (必须与 Stage 1 完全一致)
+# -----------------------------------------------------------------------------
+MODEL:
+  policy_name: CMAPolicy
+
+  # --- 1. 语言编码器 (BERT) ---
+  INSTRUCTION_ENCODER:
+    rnn_type: "BERT"
+    vocab_size: 30522
+    embedding_size: 768
+    hidden_size: 256
+    
+    # ⚠️ 注意：这里必须和你 Stage 1 训练时的设置保持一致！
+    # 如果你 Stage 1 是 False，这里也得是 False，否则权重加载会不匹配
+    fine_tune_bert: False 
+
+  # --- 2. 视觉编码器 (CLIP) ---
+  RGB_ENCODER:
+    cnn_type: "ClipVisualEncoder"
+    output_size: 256
+    trainable: True 
+
+  # --- 3. 进度监控 ---
+  PROGRESS_MONITOR:
+    use: True
+    alpha: 1.0

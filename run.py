@@ -11,6 +11,7 @@ import torch
 from habitat import logger
 from habitat_baselines.common.baseline_registry import baseline_registry
 import vlnce_baselines.models.candidate_policy
+
 import habitat_extensions  # noqa: F401
 import vlnce_baselines  # noqa: F401
 from vlnce_baselines.config.default import get_config

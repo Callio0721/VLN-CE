@@ -163,11 +163,19 @@ class BertInstructionEncoder(nn.Module):
             nn.Dropout(0.1)
         )
 
-        self.attn_fc = nn.Sequential(
-            nn.Linear(self.bert_dim, 128),
-            nn.Tanh(),
-            nn.Linear(128, 1)
-        )
+        # 🔥🔥🔥 修改开始：只在需要的时候才创建这个层 🔥🔥🔥
+        # 你的报错里 index 2,3,4,5 指的就是这个 Sequential 里的 4 个参数 (2个Linear的weight+bias)
+        # 加上这个 if 判断，CMA 模式下就不会创建它们，DDP 就不会报错了！
+        if self.config.final_state_only:
+            self.attn_fc = nn.Sequential(
+                nn.Linear(self.bert_dim, 128),
+                nn.Tanh(),
+                nn.Linear(128, 1)
+            )
+        else:
+            # 显式设为 None，防止调用出错
+            self.attn_fc = None
+        # 🔥🔥🔥 修改结束 🔥🔥🔥
 
     @property
     def output_size(self):

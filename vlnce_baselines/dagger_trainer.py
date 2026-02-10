@@ -24,6 +24,7 @@ from vlnce_baselines.common.base_il_trainer import BaseVLNCETrainer
 from vlnce_baselines.common.env_utils import construct_envs
 from vlnce_baselines.common.utils import extract_instruction_tokens
 
+from torch.cuda.amp import autocast, GradScaler # 🔥 新增导入
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
     # import tensorflow as tf  # noqa: F401
@@ -289,6 +290,73 @@ class DaggerTrainer(BaseVLNCETrainer):
         )
         super().__init__(config)
 
+        # 🔥 新增：初始化梯度缩放器（用于混合精度）
+        self.scaler = GradScaler()
+    def _update_agent(
+        self,
+        observations,
+        prev_actions,
+        not_done_masks,
+        corrected_actions,
+        weights,
+        step_grad: bool = True,
+        loss_accumulation_scalar: int = 1,
+    ):
+        T, N = corrected_actions.size()
+
+        # 自动判断是否使用了 DDP
+        net = self.policy.net.module if hasattr(self.policy.net, "module") else self.policy.net
+
+        recurrent_hidden_states = torch.zeros(
+            N,
+            net.num_recurrent_layers,
+            self.config.MODEL.STATE_ENCODER.hidden_size,
+            device=self.device,
+        )
+
+        AuxLosses.clear()
+
+        # 🔥 1. 开启前向传播的自动混合精度
+        with autocast():
+            distribution = self.policy.build_distribution(
+                observations, recurrent_hidden_states, prev_actions, not_done_masks
+            )
+
+            logits = distribution.logits
+            logits = logits.view(T, N, -1)
+
+            # 交叉熵计算 (在 autocast 下会自动处理为稳定精度)
+            action_loss = F.cross_entropy(
+                logits.permute(0, 2, 1), corrected_actions, reduction="none"
+            )
+            action_loss = ((weights * action_loss).sum(0) / weights.sum(0)).mean()
+
+            aux_mask = (weights > 0).view(-1)
+            aux_loss = AuxLosses.reduce(aux_mask)
+
+            loss = action_loss + aux_loss
+            loss = loss / loss_accumulation_scalar
+
+        # 🔥 2. 使用 scaler 缩放损失并进行反向传播
+        # 代替原来的 loss.backward()
+        self.scaler.scale(loss).backward()
+
+        if step_grad:
+            # 如果你有梯度裁剪，在这里添加：
+            # self.scaler.unscale_(self.optimizer)
+            # torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm)
+
+            # 🔥 3. 使用 scaler.step 更新参数并更新 scaler 状态
+            # 代替原来的 self.optimizer.step()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            
+            self.optimizer.zero_grad()
+
+        if isinstance(aux_loss, torch.Tensor):
+            aux_loss = aux_loss.item()
+            
+        return loss.item(), action_loss.item(), aux_loss
     # ------------------ 🔥 新增修复代码开始 🔥 ------------------
     def load_checkpoint(self, checkpoint_path, *args, **kwargs):
         """
@@ -749,7 +817,7 @@ class DaggerTrainer(BaseVLNCETrainer):
                 # 我们应该从第 2 个 epoch 开始跑 (6 % 4 = 2)
                 elif self.config.IL.load_from_ckpt and dagger_it == (self.start_epoch // epochs_per_iter):
                     current_start_epoch = self.start_epoch % epochs_per_iter
-                    if dist.get_rank() == 0:
+                    if not dist.is_initialized() or dist.get_rank() == 0:
                         logger.info(f"Resuming DAgger Iter {dagger_it} from Epoch {current_start_epoch}.")
                 
                 # 3. 如果是全新的轮次 (例如 dagger_it=2)
