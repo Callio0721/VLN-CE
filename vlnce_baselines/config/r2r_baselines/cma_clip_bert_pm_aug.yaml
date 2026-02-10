@@ -1,0 +1,106 @@
+BASE_TASK_CONFIG_PATH: habitat_extensions/config/vlnce_task_aug.yaml
+
+# -----------------------------------------------------------------------------
+# 硬件与系统设置
+# -----------------------------------------------------------------------------
+SIMULATOR_GPU_IDS: [4] # 使用 4 张显卡跑模拟器
+TORCH_GPU_ID: 4                 # 使用 0 号卡跑模型训练
+# ⚠️ 内存安全设置：
+# 之前测试 4 会导致内存(RAM)吃紧，3 是比较稳妥的选择 (总共 4x3=12 个环境)
+# 如果发现 Swap 还是很高，可以降为 2
+NUM_ENVIRONMENTS: 3
+
+TENSORBOARD_DIR: data/tensorboard_dirs/cma_clip_bert_pm_aug
+CHECKPOINT_FOLDER: data/checkpoints/cma_clip_bert_pm_aug
+EVAL_CKPT_PATH_DIR: data/checkpoints/cma_clip_bert_pm_aug
+RESULTS_DIR: data/checkpoints/cma_clip_bert_pm_aug/evals/temp
+
+# -----------------------------------------------------------------------------
+# 评估设置
+# -----------------------------------------------------------------------------
+EVAL:
+  USE_CKPT_CONFIG: False
+  SPLIT: val_unseen
+  EPISODE_COUNT: 100
+
+# -----------------------------------------------------------------------------
+# 模仿学习 (Imitation Learning) 设置
+# -----------------------------------------------------------------------------
+IL:
+  # 官方默认 45，BERT+CLIP 收敛快，但保持 45 可以跑出更高分
+  epochs: 45
+  batch_size: 3
+
+  DAGGER:
+    iterations: 1 # Stage 1: 纯 Teacher Forcing
+    lmdb_fp16: True
+    # R2R (10k) + Aug (147k) ≈ 15.7万条数据
+    # 这是最耗时的步骤，进度条会走很久，耐心等待
+    update_size: 100000 # 157232
+    
+    p: 1.0
+
+    # 第一次跑设为 False (生成数据)
+    # 如果中途断了想续传，代码会自动检测目录非空，不用手动改 True
+    preload_lmdb_features: False
+    lmdb_features_dir: data/trajectories_dirs/cma_clip_bert_pm_aug/trajectories.lmdb
+    lmdb_map_size: 2e12
+
+# -----------------------------------------------------------------------------
+# 任务与传感器配置 (关键修改！)
+# -----------------------------------------------------------------------------
+TASK_CONFIG:
+  TASK:
+    # 覆盖旧 Sensor 列表
+    SENSORS: ['BERT_INSTRUCTION_SENSOR', 'SHORTEST_PATH_SENSOR', 'VLN_ORACLE_PROGRESS_SENSOR']
+    
+    # 定义 BERT Sensor 参数
+    BERT_INSTRUCTION_SENSOR:
+      TYPE: BertInstructionSensor
+      MAX_LENGTH: 200
+
+# -----------------------------------------------------------------------------
+# 模型结构配置
+# -----------------------------------------------------------------------------
+MODEL:
+  policy_name: CMAPolicy
+
+  # --- 1. 语言编码器 (BERT) ---
+  INSTRUCTION_ENCODER:
+    # 修正日志显示 (覆盖默认的 LSTM)
+    rnn_type: "BERT"      # 这里可以是BERT或LSTM
+    vocab_size: 30522     # 修正词表大小显示
+    embedding_size: 768   # 修正维度显示
+    # 这里的参数对应我们写的 BertInstructionEncoder.__init__
+    hidden_size: 256       # 投影到与视觉特征一致的维度
+
+    # True  = 全量微调 (BERT参数变 + Linear参数变) -> 显存占用大，效果上限高
+    # False = 冻结BERT (BERT参数不变，只训练后面的Linear) -> 显存小，像CLIP一样
+    fine_tune_bert: False   # 开启微调，让 BERT 适应导航指令
+    # bidirectional: True  # BERT 天生双向，这个参数实际上被我们新代码忽略了，留着也不报错
+
+    # rnn_type: "LSTM"      # 👈 改回 LSTM，代码自动切回旧模型
+    # # fine_tune_bert: False # 这行删不删都无所谓，因为 LSTM 代码不读它
+    # vocab_size: 2504
+    # embedding_size: 50
+
+
+  # --- 2. 视觉编码器 (CLIP) ---
+  RGB_ENCODER:
+    cnn_type: "ClipVisualEncoder"
+    output_size: 256
+    trainable: True  # 训练 Adapter/Projection 层
+
+  # --- 3. 进度监控 (辅助任务) ---
+  PROGRESS_MONITOR:
+    use: True
+    alpha: 1.0       # Loss 权重
+
+
+# 运行这个配置的代码
+# python run.py     --exp-config vlnce_baselines/config/r2r_baselines/cma_clip_bert_pm_aug.yaml     --run-type train     SIMULATOR_GPU_IDS "[1]"     TORCH_GPU_ID 1     NUM_ENVIRONMENTS 1     IL.DAGGER.update_size 20     IL.epochs 2     IL.batch_size 2     TENSORBOARD_DIR data/tensorboard_dirs/debug_test     CHECKPOINT_FOLDER data/checkpoints/debug_test     IL.DAGGER.lmdb_commit_frequency 1  # 👈 关键修改：每跑完1条数据就立即存盘，系统设定是500条，非常大，不适合测试
+# python run.py     --exp-config vlnce_baselines/config/r2r_baselines/cma_clip_bert_pm_aug.yaml     --run-type train     SIMULATOR_GPU_IDS "[1]"     TORCH_GPU_ID 1     NUM_ENVIRONMENTS 1     IL.DAGGER.update_size 20     IL.epochs 2     IL.batch_size 2     TENSORBOARD_DIR data/tensorboard_dirs/debug_test     CHECKPOINT_FOLDER data/checkpoints/debug_test     IL.DAGGER.lmdb_commit_frequency 1
+
+# torchrun --nproc_per_node=8 run.py \
+#     --exp-config vlnce_baselines/config/r2r_baselines/cma_clip_bert_pm_aug.yaml \
+#     --run-type train
