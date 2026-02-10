@@ -8,11 +8,8 @@ python run.py \
 
 tensorboard --logdir /data/DataLACP/zhangbodong/ZBD/VLN-CE/data/tensorboard_dirs --port=6008
 tensorboard --logdir /home/ShiKaituo/ZhangBodong/VLN-CE/data/tensorboard_dirs
-<<<<<<< HEAD
-=======
 tensorboard --logdir /data2/zhangbodong/VLN-CE/data/tensorboard_dirs
 
->>>>>>> 1efb25eb0a2e7c62782faafba2cd0632b7dc8630
 查看当前目录中文件的修改日期（mtime）
 ls -lt
 
@@ -119,7 +116,7 @@ torchrun --nproc_per_node=4 run.py \
 
 python run.py \
     --exp-config vlnce_baselines/config/r2r_baselines/cma_clip_pm_da_aug_tune.yaml \
-    --run-type eval \
+    --run-type train \
 python run.py \
     --exp-config vlnce_baselines/config/r2r_baselines/cma_clip_bert_pm_aug.yaml \
     --run-type eval \

@@ -176,6 +176,14 @@ class CandidateCMAPolicy(ILPolicy):
             action_space=action_space,
             model_config=config.MODEL,
         )
+        
+    @staticmethod
+    def get_redundant_keys():
+        """
+        告诉 DAggerTrainer 在存入 LMDB 前删除这些大体积键。
+        对于 Candidate 模型，WAYPOINT_SENSOR 预测的候选点数据量极大。
+        """
+        return ["waypoint_sensor"]
 
     def act(
         self,

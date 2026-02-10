@@ -3,8 +3,8 @@ BASE_TASK_CONFIG_PATH: habitat_extensions/config/vlnce_task.yaml # ⚠️ DAgger
 # -----------------------------------------------------------------------------
 # 硬件与系统设置
 # -----------------------------------------------------------------------------
-SIMULATOR_GPU_IDS: [0, 2, 3, 4, 5, 6]
-TORCH_GPU_ID: 3
+SIMULATOR_GPU_IDS: [ 6]
+TORCH_GPU_ID: 6
 # ⚠️ DAgger 需要在训练循环中频繁进行采样 (Sampling)
 # 为了防止 DDP 死锁和内存爆炸，建议保守设置。
 # 如果用 4 卡 DDP，这里设为 1，总共就是 4 个环境。
@@ -49,7 +49,7 @@ IL:
     preload_lmdb_features: False 
     
     # 这些新产生的数据暂存的位置（每轮都会被清空重写）
-    lmdb_features_dir: data/trajectories_dirs/cma_clip_pm_da_aug_tune/trajectories.lmdb
+    lmdb_features_dir: data/trajectories_dirs/debug/trajectories.lmdb
     lmdb_map_size: 1e12 # 1TB 空间预留，防止溢出
     
     # ⚠️ 极为重要：从 Stage 1 加载权重

@@ -462,23 +462,65 @@ class DaggerTrainer(BaseVLNCETrainer):
 
         ensure_unique_episodes = beta == 1.0
 
+        # def hook_builder(tgt_tensor):
+        #     def hook(m, i, o):
+        #         tgt_tensor.set_(o.cpu())
+
+        #     return hook
+
+
         def hook_builder(tgt_tensor):
             def hook(m, i, o):
-                tgt_tensor.set_(o.cpu())
-
+                # 兼容性处理：HuggingFace 的模型输出通常是一个对象，而不是 Tensor
+                # 如果是 CLIPVisionModel，输出在 .last_hidden_state 里
+                if hasattr(o, "last_hidden_state"):
+                    output_tensor = o.last_hidden_state
+                else:
+                    output_tensor = o
+                
+                # 将 Tensor 复制到 CPU 缓存
+                tgt_tensor.set_(output_tensor.cpu())
             return hook
 
         rgb_features = None
         rgb_hook = None
-        if not self.config.MODEL.RGB_ENCODER.trainable:
+        
+        # 强制开启 Hook (if True)，确保能截取特征并删除原始图片
+        if True: 
             rgb_features = torch.zeros((1,), device="cpu")
-            # rgb_hook = self.policy.net.rgb_encoder.cnn.register_forward_hook(
-            #     hook_builder(rgb_features)
-            # )
-            # 👈 修改这里：使用 net_module 防止 DDP 下找不到 encoder
-            rgb_hook = net_module.rgb_encoder.cnn.register_forward_hook(
+            
+            # 1. 智能查找 Visual Encoder 的核心模块
+            # net_module 是你的 Policy 网络
+            encoder = net_module.rgb_encoder
+            
+            target_module = None
+            if hasattr(encoder, "cnn"):
+                # 情况 A: 传统的 ResNet Encoder
+                target_module = encoder.cnn
+            elif hasattr(encoder, "backbone"):
+                # 情况 B: 你的 ClipVisualEncoder
+                target_module = encoder.backbone
+            else:
+                # 情况 C: 可能是其他结构，尝试直接 Hook 编码器本身
+                target_module = encoder
+
+            # 2. 注册 Hook
+            # print(f"DEBUG: Hooking into {type(target_module)}") # 调试用
+            rgb_hook = target_module.register_forward_hook(
                 hook_builder(rgb_features)
             )
+        # ------------------ 🔥 修改结束 ------------------
+        # rgb_features = None
+        # rgb_hook = None
+        # if not self.config.MODEL.RGB_ENCODER.trainable:
+        #     rgb_features = torch.zeros((1,), device="cpu")
+        #     # rgb_hook = self.policy.net.rgb_encoder.cnn.register_forward_hook(
+        #     #     hook_builder(rgb_features)
+        #     # )
+        #     # 👈 修改这里：使用 net_module 防止 DDP 下找不到 encoder
+        #     rgb_hook = net_module.rgb_encoder.cnn.register_forward_hook(
+        #         hook_builder(rgb_features)
+        #     )
 
         depth_features = None
         depth_hook = None
@@ -573,6 +615,23 @@ class DaggerTrainer(BaseVLNCETrainer):
                 for i in range(envs.num_envs):
                     if dones[i] and not skips[i]:
                         ep = episodes[i]
+
+                        # 🔥🔥🔥 修改点 2：精简 Candidate 空间 (隔离逻辑) 🔥🔥🔥
+                        # 1. 获取当前 Policy 的类 (兼容 DDP)
+                        policy_cls = self.policy.module.__class__ if hasattr(self.policy, "module") else self.policy.__class__
+                        
+                        # 2. 检查是否有 get_redundant_keys 方法 (这就是隔离逻辑)
+                        # 只有 CandidateCMAPolicy 才有这个方法，其他模型不会受影响
+                        if hasattr(policy_cls, "get_redundant_keys"):
+                            redundant_keys = policy_cls.get_redundant_keys()
+                            # 遍历当前 episode 的每一步进行清洗
+                            for step_data in ep:
+                                obs = step_data[0] # observations 字典
+                                # 1. 删除 waypoint_sensor
+                                for r_key in redundant_keys:
+                                    if r_key in obs:
+                                        del obs[r_key]
+
                         traj_obs = batch_obs(
                             [step[0] for step in ep],
                             device=torch.device("cpu"),
@@ -588,6 +647,12 @@ class DaggerTrainer(BaseVLNCETrainer):
                             np.array([step[1] for step in ep], dtype=np.int64),
                             np.array([step[2] for step in ep], dtype=np.int64),
                         ]
+                        if collected_eps == 0:
+                            print("Keys being saved:", traj_obs.keys())
+                            if "rgb" in traj_obs:
+                                print("❌ 警告：正在存储原始 RGB 图片！Hook 未生效或删除逻辑未执行！")
+                            if "rgb_features" in traj_obs:
+                                print("✅ 成功：正在存储 RGB 特征。")
                         txn.put(
                             str(start_id + collected_eps).encode(),
                             msgpack_numpy.packb(
