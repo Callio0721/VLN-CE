@@ -100,6 +100,7 @@ MODEL:
 # 运行这个配置的代码
 # python run.py     --exp-config vlnce_baselines/config/r2r_baselines/cma_clip_bert_pm_aug.yaml     --run-type train     SIMULATOR_GPU_IDS "[1]"     TORCH_GPU_ID 1     NUM_ENVIRONMENTS 1     IL.DAGGER.update_size 20     IL.epochs 2     IL.batch_size 2     TENSORBOARD_DIR data/tensorboard_dirs/debug_test     CHECKPOINT_FOLDER data/checkpoints/debug_test     IL.DAGGER.lmdb_commit_frequency 1  # 👈 关键修改：每跑完1条数据就立即存盘，系统设定是500条，非常大，不适合测试
 # python run.py     --exp-config vlnce_baselines/config/r2r_baselines/cma_clip_bert_pm_aug.yaml     --run-type train     SIMULATOR_GPU_IDS "[1]"     TORCH_GPU_ID 1     NUM_ENVIRONMENTS 1     IL.DAGGER.update_size 20     IL.epochs 2     IL.batch_size 2     TENSORBOARD_DIR data/tensorboard_dirs/debug_test     CHECKPOINT_FOLDER data/checkpoints/debug_test     IL.DAGGER.lmdb_commit_frequency 1
+# python run.py     --exp-config vlnce_baselines/config/r2r_baselines/cma_clip_bert_pm_aug.yaml     --run-type train     SIMULATOR_GPU_IDS "[1]"     TORCH_GPU_ID 1     NUM_ENVIRONMENTS 1     IL.DAGGER.update_size 20     IL.epochs 2     IL.batch_size 2     TENSORBOARD_DIR data/tensorboard_dirs/debug_test     CHECKPOINT_FOLDER data/checkpoints/debug_test     IL.DAGGER.lmdb_commit_frequency 1
 
 # torchrun --nproc_per_node=8 run.py \
 #     --exp-config vlnce_baselines/config/r2r_baselines/cma_clip_bert_pm_aug.yaml \

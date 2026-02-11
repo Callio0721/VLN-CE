@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-
+from habitat_extensions.task import BertInstructionSensor
+from vlnce_baselines.common.candidate_actions import register_candidate_actions
+register_candidate_actions()
 import argparse
 import os
 import random
@@ -8,6 +10,7 @@ import numpy as np
 import torch
 from habitat import logger
 from habitat_baselines.common.baseline_registry import baseline_registry
+import vlnce_baselines.models.candidate_policy
 
 import habitat_extensions  # noqa: F401
 import vlnce_baselines  # noqa: F401

@@ -239,7 +239,7 @@ class ClipVisualEncoder(nn.Module):
         self, 
         output_size,   # <--- 改动点：必须放在第一个，匹配 CMAPolicy 的调用
         observation_space=None, # 改动点：变成可选参数，或者直接删掉，用 kwargs 接收
-        model_name="/data2/zhangbodong/VLN-CE/clip-vit-base-patch32",
+        model_name="/home/ShiKaituo/ZhangBodong/VLN-CE/clip-vit-base-patch32",
         trainable=False, 
         **kwargs       # <--- 这里会帮你“吞掉” normalize_visual_inputs 和 spatial_output 等多余参数，防止报错
     ):
@@ -291,36 +291,69 @@ class ClipVisualEncoder(nn.Module):
     def output_shape(self):
         return self._output_shape
 
+
     def forward(self, observations):
             """
             observations["rgb"]: [Batch, H, W, 3] (uint8 0-255)
             """
-            rgb = observations["rgb"]
-            
-            # 1. 数据预处理
-            # [B, H, W, 3] -> [B, 3, H, W] -> float -> 0-1
-            rgb = rgb.permute(0, 3, 1, 2).float() / 255.0
-            
-            # 应用 CLIP 标准化
-            # 2. 手动归一化 (直接用 Tensor 计算，支持 Batch)
-            # 删掉: rgb = self.preprocess(rgb)
-            rgb = (rgb - self.clip_mean) / self.clip_std
+            # 🔥🔥🔥 新增逻辑：优先检查是否有预计算的特征 🔥🔥🔥
+            # 如果 DAgger 已经把 Backbone 的特征跑出来并存好了，直接用！
+            if "rgb_features" in observations:
+                features = observations["rgb_features"]
+            else:
+                # 只有没缓存的时候，才跑 CLIP Backbone
+                rgb = observations["rgb"]
+                
+                # 1. 数据预处理
+                # [B, H, W, 3] -> [B, 3, H, W] -> float -> 0-1
+                rgb = rgb.permute(0, 3, 1, 2).float() / 255.0
+                
+                # 应用 CLIP 标准化
+                rgb = (rgb - self.clip_mean) / self.clip_std
 
-            # 2. CLIP 前向传播
-            # 输出: [Batch, Seq_Len(50), Hidden(768)]
-            outputs = self.backbone(pixel_values=rgb)
-            features = outputs.last_hidden_state
+                # 2. CLIP 前向传播
+                outputs = self.backbone(pixel_values=rgb)
+                features = outputs.last_hidden_state
 
-            # 3. 提取特征
+            # 3. 提取特征 (不管是缓存的还是新算的，格式都是 [Batch, 50, 768])
             # 去掉第一个 [CLS] token (索引0)，保留后面的 spatial patches (索引1-49)
-            # features 变成 [Batch, 49, 768]
             spatial_features = features[:, 1:, :]
             
-            # 4. 降维投影
-            # [Batch, 49, 768] -> [Batch, 49, 512]
+            # 4. 降维投影 (这个 Projection 层是你要训练的！)
             spatial_features = self.projection(spatial_features)
 
-            # 5. 调整形状以适配 CMANet
-            # CMANet 期望的是 [Batch, Channel, Spatial/Seq]
-            # 所以我们需要转置: [Batch, 512, 49]
+            # 5. 调整形状
             return spatial_features.permute(0, 2, 1)
+    # def forward(self, observations):
+    #         """
+    #         observations["rgb"]: [Batch, H, W, 3] (uint8 0-255)
+    #         """
+    #         rgb = observations["rgb"]
+            
+    #         # 1. 数据预处理
+    #         # [B, H, W, 3] -> [B, 3, H, W] -> float -> 0-1
+    #         rgb = rgb.permute(0, 3, 1, 2).float() / 255.0
+            
+    #         # 应用 CLIP 标准化
+    #         # 2. 手动归一化 (直接用 Tensor 计算，支持 Batch)
+    #         # 删掉: rgb = self.preprocess(rgb)
+    #         rgb = (rgb - self.clip_mean) / self.clip_std
+
+    #         # 2. CLIP 前向传播
+    #         # 输出: [Batch, Seq_Len(50), Hidden(768)]
+    #         outputs = self.backbone(pixel_values=rgb)
+    #         features = outputs.last_hidden_state
+
+    #         # 3. 提取特征
+    #         # 去掉第一个 [CLS] token (索引0)，保留后面的 spatial patches (索引1-49)
+    #         # features 变成 [Batch, 49, 768]
+    #         spatial_features = features[:, 1:, :]
+            
+    #         # 4. 降维投影
+    #         # [Batch, 49, 768] -> [Batch, 49, 512]
+    #         spatial_features = self.projection(spatial_features)
+
+    #         # 5. 调整形状以适配 CMANet
+    #         # CMANet 期望的是 [Batch, Channel, Spatial/Seq]
+    #         # 所以我们需要转置: [Batch, 512, 49]
+    #         return spatial_features.permute(0, 2, 1)

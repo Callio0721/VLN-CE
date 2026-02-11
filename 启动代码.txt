@@ -37,6 +37,9 @@ python run.py \
 
 在运行训练之前执行：
 script -f /data/DataLACP/zhangbodong/ZBD/VLN-CE/log/training_log.txt
+
+script -f /home/ShiKaituo/ZhangBodong/VLN-CE/data/log/eval.log
+script -f /home/ShiKaituo/ZhangBodong/VLN-CE/data/checkpoints/candidate_cma_clip_bert/candidate_cma_clip_bert.log
 script -f /data2/zhangbodong/VLN-CE/data/log/train_clip_bert_log.log
 然后正常运行你的深度学习代码
 
@@ -66,6 +69,8 @@ tmux new -s resume_train
 第二步：启动录制（使用追加模式或新文件）
 # 建议用 -a 追加，或者换个文件名
 script -f  /home/ShiKaituo/ZhangBodong/VLN-CE/data/log/training_clip_bert_log.txt
+script -f  /home/ShiKaituo/ZhangBodong/VLN-CE/data/checkpoints/cma_clip_pm_da_aug_tune/second.log
+script -f  /home/ShiKaituo/ZhangBodong/VLN-CE/data/checkpoints/cma_clip_pm_da_aug_tune/evals/eval.log
 script -f /data2/zhangbodong/VLN-CE/data/log/train_clip_bert_log.log
 script -f /data2/zhangbodong/VLN-CE/data/checkpoints/cma_clip_bert_pm_aug/evals/eval.log
 script -f /data2/zhangbodong/VLN-CE/data/log/train_clip_bert_pm_da_aug_tune.log
@@ -108,6 +113,10 @@ torchrun --nproc_per_node=4 run.py \
     IL.DAGGER.preload_lmdb_features False
 
 
+
+python run.py \
+    --exp-config vlnce_baselines/config/r2r_baselines/cma_clip_pm_da_aug_tune.yaml \
+    --run-type train \
 python run.py \
     --exp-config vlnce_baselines/config/r2r_baselines/cma_clip_bert_pm_aug.yaml \
     --run-type eval \
